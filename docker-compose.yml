@@ -1,0 +1,91 @@
+services:
+  triton:
+    build:
+      context: .
+      dockerfile: Dockerfile.triton
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+      HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN:-}
+      WHISPER_MODEL: ${WHISPER_MODEL:-Systran/faster-whisper-small}
+      WHISPER_DEVICE: ${WHISPER_DEVICE:-cuda}
+      WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-float16}
+      TRITON_MODEL_NAME: ${TRITON_MODEL_NAME:-whisper_asr}
+    ports:
+      - "127.0.0.1:28000:8000"
+      - "127.0.0.1:28001:8001"
+      - "127.0.0.1:28002:8002"
+    shm_size: 2gb
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${TRITON_GPU:-0}"]
+              capabilities: [gpu]
+
+  vllm:
+    image: vllm/vllm-openai:v0.10.2
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+      HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN:-}
+    command:
+      - --model
+      - ${MODEL_NAME:-Qwen/Qwen2.5-7B-Instruct}
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --max-model-len
+      - "8192"
+      - --gpu-memory-utilization
+      - "0.90"
+      - --enable-chunked-prefill
+      - --enable-prefix-caching
+    ports:
+      - "127.0.0.1:28080:8000"
+    shm_size: 8gb
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${VLLM_GPU:-1}"]
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 20s
+      timeout: 10s
+      retries: 30
+      start_period: 600s
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      TRITON_SERVER_URL: ${TRITON_SERVER_URL:-triton:8001}
+      TRITON_MODEL_NAME: ${TRITON_MODEL_NAME:-whisper_asr}
+      VLLM_SERVER_URL: ${VLLM_SERVER_URL:-http://vllm:8000}
+      MODEL_NAME: ${MODEL_NAME:-Qwen/Qwen2.5-7B-Instruct}
+      TARGET_LANGUAGE: ${TARGET_LANGUAGE:-English}
+      MAX_INFLIGHT_ASR: ${MAX_INFLIGHT_ASR:-4}
+      MAX_INFLIGHT_LLM: ${MAX_INFLIGHT_LLM:-8}
+      AUDIO_QUEUE_SIZE: ${AUDIO_QUEUE_SIZE:-8}
+      SAMPLE_RATE: ${SAMPLE_RATE:-16000}
+      ENDPOINT_SILENCE_MS: ${ENDPOINT_SILENCE_MS:-480}
+      MAX_SEGMENT_MS: ${MAX_SEGMENT_MS:-12000}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      - triton
+      - vllm
+    ports:
+      - "127.0.0.1:${PORT:-8080}:8080"
+
+  nginx:
+    image: nginx:1.27-alpine
+    depends_on:
+      - backend
+    ports:
+      - "127.0.0.1:${NGINX_PORT:-8088}:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro

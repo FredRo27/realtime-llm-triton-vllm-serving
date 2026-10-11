@@ -1,0 +1,11 @@
+FROM nvcr.io/nvidia/tritonserver:24.10-py3
+
+RUN pip install --no-cache-dir "faster-whisper==1.1.0"
+
+COPY model_repository /models
+COPY scripts/start_triton.sh /opt/start_triton.sh
+RUN chmod 755 /opt/start_triton.sh
+
+EXPOSE 8000 8001 8002
+
+ENTRYPOINT ["/opt/start_triton.sh"]
